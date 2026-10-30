@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini IP Manager</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --card: #ffffff; --text: #1d2430; --muted: #6b7585; --line: #e2e6ec;
+    --primary: #2563eb; --primary-weak: #e8efff; --ok: #15803d; --ok-weak: #e7f6ec; --err: #b91c1c; --err-weak: #fdecec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #98a2b3; --line: #2b323e;
+      --primary: #5b8cff; --primary-weak: #1f2a44; --ok: #4ade80; --ok-weak: #15291d; --err: #f87171; --err-weak: #331a1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Pretendard", "Malgun Gothic", system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  header h1 { font-size: 20px; margin: 0; flex: 1; }
+  nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 600; }
+  nav a.on { background: var(--primary-weak); color: var(--primary); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .now { font-size: 20px; font-weight: 700; }
+  .now small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+  .info { color: var(--muted); margin-top: 6px; word-break: break-all; }
+  .switch-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--card); color: var(--text); padding: 7px 14px; }
+  button:hover { border-color: var(--primary); }
+  button:disabled { opacity: .5; cursor: default; }
+  .btn-pri { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn-del { color: var(--err); }
+  .big { padding: 18px 14px; font-size: 16px; font-weight: 700; border-radius: 12px; }
+  .big small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .big.on { border: 2px solid var(--ok); background: var(--ok-weak); color: var(--ok); }
+  .others { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .others button.on { border-color: var(--ok); background: var(--ok-weak); color: var(--ok); }
+  .warn { background: var(--err-weak); color: var(--err); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+           background: var(--primary-weak); color: var(--primary); margin-left: 6px; vertical-align: middle; }
+  select, input[type=text] { width: 100%; font: inherit; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line);
+                             background: var(--bg); color: var(--text); }
+  input.bad { border-color: var(--err); }
+
+  /* 고정 IP 목록 */
+  .item { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
+  .item.def { border: 2px solid var(--primary); }
+  .item-head { display: flex; align-items: center; gap: 8px; }
+  .item-head strong { flex: 1; font-size: 15px; }
+  .vals { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 8px 0 10px; font-size: 13px; }
+  .vals dt { color: var(--muted); } .vals dd { margin: 0; font-weight: 600; }
+  .item-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .empty { color: var(--muted); text-align: center; padding: 20px 0; }
+  .welcome { border: 2px solid var(--primary); background: var(--primary-weak); }
+  .welcome ol { margin: 0 0 8px; padding-left: 20px; }
+
+  /* 등록 폼: Windows IPv4 속성 창과 같은 순서 */
+  .form-row { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; margin: 6px 0; }
+  .form-row label { color: var(--text); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px 10px; margin: 12px 0 0; }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+  .chk { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
+  .form-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  .form-btns .sp { flex: 1; }
+  .err-msg { color: var(--err); font-size: 12px; min-height: 18px; margin-top: 6px; }
+
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); padding: 10px 16px;
+           border-radius: 10px; background: #1d2430; color: #fff; display: none; max-width: 90vw; z-index: 9; }
+  .toast.err { background: #b91c1c; }
+  @media (max-width: 480px) { .switch-row { grid-template-columns: 1fr; } .form-row { grid-template-columns: 1fr; gap: 2px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Mini IP Manager</h1>
+    <nav><a href="#/" id="navMain">전환</a><a href="#/manage" id="navManage">고정 IP 관리</a></nav>
+    <button id="btnQuit" title="Mini IP Manager를 끕니다. 네트워크 설정은 그대로 유지됩니다.">끄기</button>
+  </header>
+  <div id="adminWarn" class="warn" hidden>관리자 권한이 아니어서 IP를 바꿀 수 없습니다. 관리자 권한으로 다시 실행하세요.</div>
+
+  <!-- 전환 화면 -->
+  <div id="viewMain">
+    <section class="card">
+      <div class="now" id="now">불러오는 중…</div>
+      <div class="info" id="info"></div>
+    </section>
+    <section class="card">
+      <div class="switch-row">
+        <button id="btnStatic" class="big">고정 IP<small id="defText">-</small></button>
+        <button id="btnDhcp" class="big">자동 IP<small>외근 · DHCP</small></button>
+      </div>
+      <div class="others" id="others"></div>
+    </section>
+  </div>
+
+  <!-- 고정 IP 관리 화면 -->
+  <div id="viewManage" hidden>
+    <section class="card welcome" id="welcome" hidden>
+      <h2>처음 실행입니다</h2>
+      <ol>
+        <li>아래 <b>네트워크 어댑터</b>가 내 PC의 Wi-Fi(또는 이더넷)인지 확인하세요.</li>
+        <li>회사에서 쓰는 <b>내 고정 IP</b>를 등록하세요. 제어판의 IPv4 속성과 같은 값입니다.</li>
+      </ol>
+      <div class="hint">지금 회사 자리에서 이미 고정 IP를 쓰고 있다면 <b>현재 설정 가져오기</b>를 누르면 값이 채워집니다.
+        고정 IP 값을 모르면 IT 담당자에게 문의하세요.</div>
+    </section>
+
+    <section class="card">
+      <h2>네트워크 어댑터</h2>
+      <select id="adapterIndex"></select>
+      <div class="hint" style="margin-top:6px">IP를 바꿀 어댑터입니다. PC마다 다르니 자기 PC의 Wi-Fi나 이더넷을 고르세요.</div>
+    </section>
+
+    <section class="card">
+      <div class="item-head"><strong>등록된 고정 IP</strong><button id="btnNew" class="btn-pri">+ 새로 등록</button></div>
+      <div id="list"></div>
+    </section>
+
+    <section class="card" id="formCard" hidden>
+      <h2 id="formTitle">고정 IP 등록</h2>
+      <div class="form-row"><label for="f_name">이름</label><input type="text" id="f_name" placeholder="예: 본사"></div>
+      <fieldset>
+        <legend>다음 IP 주소 사용</legend>
+        <div class="form-row"><label for="f_ip">IP 주소</label><input type="text" id="f_ip" placeholder="192.168.0.100"></div>
+        <div class="form-row"><label for="f_mask">서브넷 마스크</label><input type="text" id="f_mask" placeholder="255.255.255.0"></div>
+        <div class="form-row"><label for="f_gateway">기본 게이트웨이</label><input type="text" id="f_gateway" placeholder="192.168.0.1"></div>
+      </fieldset>
+      <fieldset>
+        <legend>다음 DNS 서버 주소 사용</legend>
+        <div class="form-row"><label for="f_dns1">기본 설정 DNS 서버</label><input type="text" id="f_dns1"></div>
+        <div class="form-row"><label for="f_dns2">보조 DNS 서버</label><input type="text" id="f_dns2"></div>
+      </fieldset>
+      <label class="chk"><input type="checkbox" id="f_default"> 기본값으로 사용 (전환 화면의 <b>고정 IP</b> 버튼)</label>
+      <div class="err-msg" id="formErr"></div>
+      <div class="form-btns">
+        <button id="btnFromCurrent" title="지금 어댑터에 설정된 값을 채웁니다">현재 설정 가져오기</button>
+        <span class="sp"></span>
+        <button id="btnCancel">취소</button>
+        <button id="btnSaveForm" class="btn-pri">저장</button>
+      </div>
+    </section>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const FIELDS = ['name', 'ip', 'mask', 'gateway', 'dns1', 'dns2'];
+const LABELS = { ip: 'IP 주소', mask: '서브넷 마스크', gateway: '기본 게이트웨이', dns1: '기본 설정 DNS', dns2: '보조 DNS' };
+const ipRe = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+let state = null, busy = false, editingId = null;
+
+async function api(path, body) {
+  const opt = body === undefined ? { cache: 'no-store' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-MiniIp': '1' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+function toast(msg, err) {
+  const t = $('#toast');
+  t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.style.display = 'block';
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', err ? 6000 : 2500);
+}
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const adapter = () => state && state.adapters.find(x => x.index === state.config.adapterIndex);
+
+// ---------- 화면 전환 ----------
+function route() {
+  const manage = location.hash === '#/manage';
+  $('#viewMain').hidden = manage; $('#viewManage').hidden = !manage;
+  $('#navMain').classList.toggle('on', !manage); $('#navManage').classList.toggle('on', manage);
+}
+window.addEventListener('hashchange', route);
+
+// ---------- 그리기 ----------
+function render() {
+  const cfg = state.config, a = adapter();
+  $('#adminWarn').hidden = state.isAdmin;
+
+  // 전환 화면
+  if (!a) {
+    $('#now').innerHTML = '<a href="#/manage">고정 IP 관리</a>에서 네트워크 어댑터를 고르세요';
+    $('#info').textContent = '';
+  } else {
+    $('#now').innerHTML = (a.mode === 'dhcp' ? '자동 IP' : a.mode === 'static' ? `고정 IP · ${esc(a.profileName)}` : '고정 IP (등록 안 된 값)')
+      + `<small>${esc(a.name)}${a.ssid ? ' · ' + esc(a.ssid) : ''}</small>`;
+    $('#info').textContent = [a.ip && `IP ${a.ip} / ${a.mask}`, a.gateway && `GW ${a.gateway}`, a.dns.length && `DNS ${a.dns.join(', ')}`]
+      .filter(Boolean).join('  ·  ') || '연결 안 됨';
+  }
+  const def = cfg.profiles.find(p => p.id === cfg.defaultProfileId);
+  const off = busy || !state.isAdmin || !a;
+  $('#defText').textContent = def ? `${def.name} · ${def.ip}` : '고정 IP 관리에서 등록하세요';
+  $('#btnStatic').disabled = off || !def;
+  $('#btnDhcp').disabled = off;
+  $('#btnStatic').classList.toggle('on', !!(a && def && a.profileId === def.id));
+  $('#btnDhcp').classList.toggle('on', !!(a && a.mode === 'dhcp'));
+  $('#others').innerHTML = cfg.profiles.filter(p => p !== def).map(p =>
+    `<button data-pid="${esc(p.id)}" class="${a && a.profileId === p.id ? 'on' : ''}" ${off ? 'disabled' : ''}>${esc(p.name)} · ${esc(p.ip)}</button>`).join('');
+
+  // 관리 화면
+  if (cfg.profiles.length) $('#welcome').hidden = true;
+  const sel = $('#adapterIndex');
+  if (document.activeElement !== sel) {
+    sel.innerHTML = '<option value="0">선택하세요</option>' + state.adapters.map(x =>
+      `<option value="${x.index}">${esc(x.name)} (${esc(x.description)})</option>`).join('');
+    sel.value = String(cfg.adapterIndex || 0);
+  }
+  $('#list').innerHTML = cfg.profiles.length ? cfg.profiles.map(p => {
+    const isDef = p.id === cfg.defaultProfileId;
+    const vals = Object.keys(LABELS).map(k => `<dt>${LABELS[k]}</dt><dd>${esc(p[k] || '-')}</dd>`).join('');
+    return `<div class="item ${isDef ? 'def' : ''}">
+      <div class="item-head"><strong>${esc(p.name)}${isDef ? '<span class="badge">기본값</span>' : ''}</strong></div>
+      <dl class="vals">${vals}</dl>
+      <div class="item-btns">
+        ${isDef ? '' : `<button data-act="default" data-id="${esc(p.id)}">기본값으로 지정</button>`}
+        <button data-act="edit" data-id="${esc(p.id)}">수정</button>
+        <button data-act="delete" data-id="${esc(p.id)}" class="btn-del">삭제</button>
+      </div></div>`;
+  }).join('') : '<div class="empty">등록된 고정 IP가 없습니다. <b>+ 새로 등록</b>을 누르세요.</div>';
+}
+
+// ---------- 저장 ----------
+async function saveConfig(patch, okMsg) {
+  const cfg = { ...state.config, ...patch };
+  try { state = await api('/api/config', cfg); render(); if (okMsg) toast(okMsg); return true; }
+  catch (e) { toast(e.message, true); return false; }
+}
+
+// ---------- 등록 폼 ----------
+function openForm(p) {
+  editingId = p ? p.id : null;
+  $('#formTitle').textContent = p ? `고정 IP 수정 · ${p.name}` : '고정 IP 등록';
+  FIELDS.forEach(k => { const el = $('#f_' + k); el.value = p ? (p[k] || '') : (k === 'mask' ? '255.255.255.0' : ''); el.classList.remove('bad'); });
+  $('#f_default').checked = p ? p.id === state.config.defaultProfileId : state.config.profiles.length === 0;
+  $('#formErr').textContent = '';
+  $('#formCard').hidden = false;
+  $('#formCard').scrollIntoView({ behavior: 'smooth' });
+  $('#f_name').focus();
+}
+
+function closeForm() { $('#formCard').hidden = true; editingId = null; }
+
+function readForm() {
+  const p = {}, errs = [];
+  FIELDS.forEach(k => {
+    const el = $('#f_' + k); p[k] = el.value.trim();
+    let bad = false;
+    if (k !== 'name') {
+      const required = k === 'ip' || k === 'mask';
+      bad = p[k] ? !ipRe.test(p[k]) : required;
+      if (bad) errs.push(LABELS[k]);
+    }
+    el.classList.toggle('bad', bad);
+  });
+  if (!p.name) p.name = p.ip;
+  if (p.dns2 && !p.dns1) errs.push('보조 DNS만 입력할 수 없음(기본 설정 DNS 먼저)');
+  if (errs.length) throw new Error('확인할 항목: ' + errs.join(', '));
+  const dup = state.config.profiles.find(x => x.ip === p.ip && x.id !== editingId);
+  if (dup) throw new Error(`이미 '${dup.name}'에 같은 IP가 등록되어 있습니다.`);
+  return p;
+}
+
+$('#btnSaveForm').onclick = async () => {
+  let p;
+  try { p = readForm(); } catch (e) { $('#formErr').textContent = e.message; return; }
+  const id = editingId || ('p' + Date.now().toString(36));
+  const profiles = editingId
+    ? state.config.profiles.map(x => x.id === editingId ? { ...p, id } : x)
+    : [...state.config.profiles, { ...p, id }];
+  let defaultProfileId = state.config.defaultProfileId;
+  if ($('#f_default').checked) defaultProfileId = id;
+  else if (defaultProfileId === id) defaultProfileId = '';
+  if (await saveConfig({ profiles, defaultProfileId }, editingId ? '수정했습니다.' : '등록했습니다.')) closeForm();
+};
+
+$('#btnCancel').onclick = closeForm;
+$('#btnNew').onclick = () => openForm(null);
+$('#btnFromCurrent').onclick = () => {
+  const a = adapter();
+  if (!a || !a.ip) { toast('어댑터를 먼저 고르세요.', true); return; }
+  $('#f_ip').value = a.ip; $('#f_mask').value = a.mask; $('#f_gateway').value = a.gateway;
+  $('#f_dns1').value = a.dns[0] || ''; $('#f_dns2').value = a.dns[1] || '';
+  if (a.mode === 'dhcp') toast('지금은 자동 IP라서, 가져온 값은 공유기가 준 임시 주소입니다.', true);
+};
+
+$('#list').onclick = async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const p = state.config.profiles.find(x => x.id === b.dataset.id); if (!p) return;
+  if (b.dataset.act === 'edit') openForm(p);
+  if (b.dataset.act === 'default') saveConfig({ defaultProfileId: p.id }, `'${p.name}'을(를) 기본값으로 지정했습니다.`);
+  if (b.dataset.act === 'delete' && confirm(`'${p.name}'을(를) 삭제할까요?`)) {
+    if (editingId === p.id) closeForm();
+    saveConfig({ profiles: state.config.profiles.filter(x => x.id !== p.id) }, '삭제했습니다.');
+  }
+};
+
+$('#adapterIndex').onchange = e => saveConfig({ adapterIndex: Number(e.target.value) }, '어댑터를 저장했습니다.');
+
+// ---------- 전환 ----------
+async function apply(mode, profileId) {
+  busy = true; render(); toast('바꾸는 중…');
+  try { state = await api('/api/apply', { mode, profileId }); toast(mode === 'dhcp' ? '자동 IP로 바꿨습니다.' : '고정 IP로 바꿨습니다.'); }
+  catch (e) { toast(e.message, true); }
+  busy = false; await refresh();
+}
+
+$('#btnStatic').onclick = () => apply('static', state.config.defaultProfileId);
+$('#btnDhcp').onclick = () => apply('dhcp');
+$('#others').onclick = e => { const b = e.target.closest('button[data-pid]'); if (b) apply('static', b.dataset.pid); };
+
+$('#btnQuit').onclick = async () => {
+  if (!confirm('Mini IP Manager를 끌까요? 지금 네트워크 설정은 그대로 유지됩니다.')) return;
+  try { await api('/api/shutdown', {}); } catch (e) {}
+  clearInterval(timer);
+  document.querySelector('main').innerHTML = '<h1>Mini IP Manager를 껐습니다.</h1><p class="hint">이 창을 닫으세요. 다시 쓰려면 바탕화면의 Mini IP Manager를 실행하세요.</p>';
+  window.close();
+};
+
+async function refresh() {
+  if (busy) return;
+  try { state = await api('/api/status'); render(); }
+  catch (e) { $('#now').textContent = '프로그램이 실행 중이 아닙니다'; $('#info').textContent = ''; }
+}
+
+// 처음 실행(등록된 고정 IP 없음): 관리 화면으로 보내고, 어댑터를 골라 두고, 등록 폼을 연다
+async function firstRun() {
+  if (!state) return;
+  const cfg = state.config;
+  if (cfg.profiles.length) {
+    if (!cfg.adapterIndex && !location.hash) location.hash = '#/manage';
+    return;
+  }
+  location.hash = '#/manage';
+  $('#welcome').hidden = false;
+  if (!cfg.adapterIndex) {
+    const up = state.adapters.filter(a => a.status === 'Up' && a.gateway);
+    if (up.length === 1) await saveConfig({ adapterIndex: up[0].index });
+  }
+  openForm(null);
+}
+
+route();
+refresh().then(firstRun);
+const timer = setInterval(refresh, 5000);
+</script>
+</body>
+</html>

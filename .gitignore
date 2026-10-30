@@ -1,0 +1,4 @@
+# 각자 PC의 설정과 기록은 올리지 않는다
+config.json
+*.log
+*.zip
