@@ -59,6 +59,10 @@
   .empty { color: var(--muted); text-align: center; padding: 20px 0; }
   .welcome { border: 2px solid var(--primary); background: var(--primary-weak); }
   .welcome ol { margin: 0 0 8px; padding-left: 20px; }
+  .update { border: 2px solid var(--ok); background: var(--ok-weak); }
+  .update #updateNotes { white-space: pre-line; margin: 6px 0; }
+  footer { text-align: center; margin-top: 8px; }
+  footer a { color: var(--muted); }
 
   /* 등록 폼: Windows IPv4 속성 창과 같은 순서 */
   .form-row { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; margin: 6px 0; }
@@ -84,6 +88,12 @@
     <button id="btnQuit" title="Mini IP Manager를 끕니다. 네트워크 설정은 그대로 유지됩니다.">끄기</button>
   </header>
   <div id="adminWarn" class="warn" hidden>관리자 권한이 아니어서 IP를 바꿀 수 없습니다. 관리자 권한으로 다시 실행하세요.</div>
+
+  <section class="card update" id="updateCard" hidden>
+    <div class="item-head"><strong id="updateTitle">새 버전이 있습니다</strong><button id="btnUpdate" class="btn-pri">업데이트</button></div>
+    <div class="hint" id="updateNotes"></div>
+    <div class="hint">저장한 고정 IP는 그대로 유지됩니다.</div>
+  </section>
 
   <!-- 전환 화면 -->
   <div id="viewMain">
@@ -147,6 +157,10 @@
       </div>
     </section>
   </div>
+  <footer class="hint" id="footer">
+    <span id="ver"></span> · <a href="#" id="lnkCheck">업데이트 확인</a>
+    · <a href="https://github.com/hunykang/mini-ip-manager" target="_blank" rel="noopener">GitHub</a>
+  </footer>
 </main>
 <div class="toast" id="toast"></div>
 
@@ -187,6 +201,7 @@ window.addEventListener('hashchange', route);
 function render() {
   const cfg = state.config, a = adapter();
   $('#adminWarn').hidden = state.isAdmin;
+  $('#ver').textContent = 'v' + (state.version || '?');
 
   // 전환 화면
   if (!a) {
@@ -327,6 +342,36 @@ $('#btnQuit').onclick = async () => {
   window.close();
 };
 
+// ---------- 업데이트 ----------
+// 서버가 GitHub 릴리스를 확인한다. 받고 설치하는 것은 사용자가 버튼을 눌렀을 때만.
+async function checkUpdate(force) {
+  try {
+    const u = await api('/api/update-check' + (force ? '?force=1' : ''));
+    $('#updateCard').hidden = !u.newer;
+    if (u.newer) {
+      $('#updateTitle').textContent = `새 버전 v${u.latest}이 있습니다 (지금 v${u.current})`;
+      $('#updateNotes').innerHTML = `<a href="${esc(u.page)}" target="_blank" rel="noopener">무엇이 바뀌었는지 보기</a>`;
+    } else if (force) {
+      toast(u.error || `최신 버전입니다 (v${u.current}).`, !!u.error);
+    }
+  } catch (e) { if (force) toast(e.message, true); }
+}
+
+$('#lnkCheck').onclick = e => { e.preventDefault(); checkUpdate(true); };
+$('#btnUpdate').onclick = async () => {
+  if (!confirm('새 버전을 받아 설치하고 다시 시작할까요?\n저장한 고정 IP와 네트워크 설정은 그대로 유지됩니다.')) return;
+  busy = true; $('#btnUpdate').disabled = true; toast('업데이트를 받는 중…');
+  let r;
+  try { r = await api('/api/update', {}); }
+  catch (e) { toast(e.message, true); busy = false; $('#btnUpdate').disabled = false; return; }
+  toast(`v${r.version} 설치 완료. 다시 시작하는 중…`);
+  for (let i = 0; i < 30; i++) {          // 새 서버가 뜰 때까지 최대 30초 기다렸다가 새로 고친다
+    await new Promise(res => setTimeout(res, 1000));
+    try { const s = await api('/api/status'); if (s.version === r.version) { location.reload(); return; } } catch (e) {}
+  }
+  toast('다시 시작하지 못했습니다. 바탕화면의 Mini IP Manager를 다시 실행하세요.', true);
+};
+
 async function refresh() {
   if (busy) return;
   try { state = await api('/api/status'); render(); }
@@ -352,6 +397,7 @@ async function firstRun() {
 
 route();
 refresh().then(firstRun);
+checkUpdate(false);
 const timer = setInterval(refresh, 5000);
 </script>
 </body>

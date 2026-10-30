@@ -11,6 +11,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$AppVersion = '1.1.0'
+$UpdateRepo = 'hunykang/mini-ip-manager'
+$UpdateAsset = 'Mini-IP-Manager.zip'
+# 업데이트로 덮어쓰는 파일. config.json과 로그는 절대 건드리지 않는다.
+$UpdateFiles = @('MiniIpManager.ps1', 'index.html', 'README.md', 'MAINTENANCE.md', 'install.ps1', '설치.cmd')
 $Root       = $PSScriptRoot
 $ConfigPath = Join-Path $Root 'config.json'
 $LogPath    = Join-Path $Root 'mini-ip-manager.log'
@@ -184,6 +189,7 @@ function Get-Status {
     $list = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Sort-Object ifIndex |
               ForEach-Object { Get-AdapterInfo $_ $ssids })
     [ordered]@{
+        version  = $AppVersion
         isAdmin  = $script:IsAdmin
         adapters = $list
         config   = $script:Config
@@ -245,6 +251,78 @@ function Set-DhcpMode {
     Write-Log "[$($a.Name)] 자동 IP(DHCP) 적용"
 }
 
+# ---------- 업데이트 ----------
+# GitHub 릴리스만 확인하고, 사용자가 버튼을 눌렀을 때만 받아서 설치한다.
+$script:UpdateCache = $null
+
+function Initialize-Web {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.WebRequest]::DefaultWebProxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials
+}
+
+function ConvertTo-Version([string]$tag) {
+    $v = $null
+    if ([version]::TryParse(($tag -replace '^[vV]', ''), [ref]$v)) { $v } else { [version]'0.0' }
+}
+
+# GitHub API는 로그인하지 않으면 IP당 시간당 60번으로 막혀(사무실처럼 IP를 같이 쓰면 금방 찬다),
+# 쓰지 않는다. releases/latest 페이지가 최신 태그(/releases/tag/vX.Y.Z)로 넘겨 주는 주소에서 버전을 읽는다.
+function Get-LatestRelease([switch]$Force) {
+    if (-not $Force -and $script:UpdateCache -and $script:UpdateCache.at -gt (Get-Date).AddHours(-1)) { return $script:UpdateCache.data }
+    Initialize-Web
+    $req = [Net.HttpWebRequest]::Create("https://github.com/$UpdateRepo/releases/latest")
+    $req.Method = 'HEAD'
+    $req.AllowAutoRedirect = $false
+    $req.Timeout = 15000
+    $req.UserAgent = "MiniIpManager/$AppVersion"
+    $res = $req.GetResponse()
+    try { $location = "$($res.Headers['Location'])" } finally { $res.Close() }
+    if ($location -notmatch "^https://github\.com/$([regex]::Escape($UpdateRepo))/releases/tag/(v?[0-9][0-9.]*)$") {
+        throw '최신 릴리스를 찾지 못했습니다.'
+    }
+    $tag = $Matches[1]
+    $latest = $tag -replace '^[vV]', ''
+    $data = [ordered]@{
+        current = $AppVersion
+        latest  = $latest
+        newer   = [bool]((ConvertTo-Version $latest) -gt (ConvertTo-Version $AppVersion))
+        page    = $location
+    }
+    $script:UpdateCache = @{ at = Get-Date; data = $data; url = "https://github.com/$UpdateRepo/releases/download/$tag/$UpdateAsset" }
+    $data
+}
+
+function Install-Update {
+    $info = Get-LatestRelease -Force
+    if (-not $info.newer) { throw "이미 최신 버전입니다 (v$AppVersion)." }
+    $url = $script:UpdateCache.url
+
+    $work = Join-Path ([IO.Path]::GetTempPath()) ("mini-ip-update-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
+        $zip = Join-Path $work $UpdateAsset
+        Invoke-WebRequest $url -OutFile $zip -UseBasicParsing -TimeoutSec 120
+
+        $out = Join-Path $work 'x'
+        Expand-Archive $zip -DestinationPath $out
+        $src = Get-ChildItem $out -Recurse -Filter 'MiniIpManager.ps1' | Select-Object -First 1
+        if (-not $src -or -not (Test-Path (Join-Path $src.DirectoryName 'index.html'))) { throw '받은 파일에 앱이 들어 있지 않습니다.' }
+
+        # 정해진 파일만, 이 폴더 안으로만 복사한다
+        foreach ($f in $UpdateFiles) {
+            $from = Join-Path $src.DirectoryName $f
+            if (Test-Path -LiteralPath $from) {
+                Copy-Item -LiteralPath $from -Destination (Join-Path $Root $f) -Force
+                Unblock-File -LiteralPath (Join-Path $Root $f) -ErrorAction SilentlyContinue
+            }
+        }
+    } finally {
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Log "업데이트 설치: v$AppVersion -> v$($info.latest)"
+    $info.latest
+}
+
 # ---------- HTTP ----------
 function Send-Response($ctx, [int]$code, [byte[]]$bytes, [string]$type) {
     $res = $ctx.Response
@@ -270,6 +348,11 @@ function Invoke-Request($ctx) {
                 Send-Response $ctx 200 ([IO.File]::ReadAllBytes($IndexPath)) 'text/html; charset=utf-8'; return
             }
             if ($path -eq '/api/status') { Send-Json $ctx (Get-Status); return }
+            if ($path -eq '/api/update-check') {
+                try { Send-Json $ctx (Get-LatestRelease -Force:($req.QueryString['force'] -eq '1')) }
+                catch { Send-Json $ctx @{ current = $AppVersion; newer = $false; error = "업데이트 확인 실패: $($_.Exception.Message)" } }
+                return
+            }
         }
         elseif ($req.HttpMethod -eq 'POST') {
             # 다른 웹사이트가 localhost로 요청을 보내지 못하게 막는다
@@ -295,6 +378,12 @@ function Invoke-Request($ctx) {
                     Start-Sleep -Seconds 2
                     Send-Json $ctx (Get-Status); return
                 }
+                '/api/update' {
+                    $v = Install-Update
+                    Send-Json $ctx @{ ok = $true; version = $v }
+                    $script:Restart = $true
+                    $script:Running = $false; return
+                }
                 '/api/shutdown' {
                     Send-Json $ctx @{ ok = $true }
                     $script:Running = $false; return
@@ -312,6 +401,7 @@ function Invoke-Request($ctx) {
 # ---------- 시작 ----------
 $script:Config = Get-Config
 $script:Running = $true
+$script:Restart = $false
 
 $listener = New-Object Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$Port/")
@@ -341,4 +431,11 @@ try {
     $listener.Stop()
     $listener.Close()
     Write-Log 'Mini IP Manager 종료'
+}
+
+# 업데이트 뒤에는 새 파일로 다시 시작한다. 이미 관리자 권한이라 UAC 창이 다시 뜨지 않고, 열린 앱 창이 스스로 새로 고친다.
+if ($script:Restart) {
+    $argList = @('-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$PSCommandPath`"", '-Port', $Port, '-NoBrowser')
+    if ($NoElevate) { $argList += '-NoElevate' }
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $argList
 }

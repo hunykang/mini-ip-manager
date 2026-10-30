@@ -67,7 +67,11 @@ Windows PC의 네트워크 어댑터 하나를 버튼 한 번으로 두 상태 �
 | GET | `/api/status` | `{ isAdmin, adapters[], config }` |
 | POST | `/api/config` | 설정 전체를 받아 검증 후 저장. 응답은 status와 같음 |
 | POST | `/api/apply` | `{ mode: "static", profileId }` 또는 `{ mode: "dhcp" }`. 응답은 status |
+| GET | `/api/update-check` | GitHub 최신 릴리스와 비교. `{ current, latest, newer, page }` (`?force=1`이면 캐시 무시, 기본 1시간 캐시). 실패해도 200 + `error` |
+| POST | `/api/update` | 최신 릴리스 zip을 받아 앱 파일만 덮어쓰고 서버를 다시 시작. `{ ok, version }` |
 | POST | `/api/shutdown` | 서버 종료 |
+
+`/api/status`에는 `version`(현재 앱 버전)도 들어 있습니다.
 
 오류는 400 + `{ error: "한국어 메시지" }`. 화면은 이 메시지를 그대로 토스트로 보여 줍니다.
 
@@ -116,6 +120,23 @@ ipconfig /renew "<어댑터 이름>"
 - 등록 폼을 열고 **기본값으로 사용**을 미리 체크
 - **현재 설정 가져오기**: 지금 어댑터 값으로 폼을 채움(DHCP 상태면 경고)
 
+## 5-1. 업데이트 기능 (v1.1.0~)
+
+사용자가 보안을 이유로 "화면을 GitHub Pages에서 띄우는 방식" 대신 **앱은 PC 안에서만 돌고, 새 버전만 GitHub에서 받는 방식**을 골랐습니다.
+
+- 버전은 `MiniIpManager.ps1`의 `$AppVersion`. 릴리스 태그 `vX.Y.Z`와 같아야 합니다.
+- 앱을 열 때 화면이 `/api/update-check`를 부르고, 서버가 `https://github.com/hunykang/mini-ip-manager/releases/latest`에 HEAD 요청을 보내 리다이렉트 주소(`/releases/tag/vX.Y.Z`)에서 최신 버전을 읽습니다(TLS 1.2, 시스템 프록시 사용).
+  - **GitHub API(api.github.com)는 쓰지 않습니다.** 로그인 없이 IP당 시간당 60번 제한이 있어, 사무실처럼 IP를 같이 쓰면 403(rate limit exceeded)이 납니다. 실제로 겪었음.
+- **받기·설치는 사용자가 업데이트 버튼을 눌렀을 때만** 합니다. 자동 설치 금지.
+- `Install-Update`의 안전장치:
+  - 다운로드 주소는 코드가 직접 조립(`https://github.com/hunykang/mini-ip-manager/releases/download/<태그>/Mini-IP-Manager.zip`), HTTPS
+  - 태그 형식이 `v숫자.숫자...`가 아니면 중단
+  - 임시 폴더에 풀고, `$UpdateFiles` 목록의 파일만 앱 폴더로 복사(경로 조작 방지). **`config.json`과 로그는 절대 덮어쓰지 않음**
+  - 복사한 파일은 `Unblock-File`
+- 설치 후 `$script:Restart`로 같은 스크립트를 `-NoBrowser`로 다시 실행합니다(이미 관리자라 UAC 없음). 열린 앱 창은 새 버전이 응답할 때까지 기다렸다가 새로 고칩니다.
+- 남는 위험: GitHub 계정이 탈취되면 악성 버전이 릴리스될 수 있습니다. 그래서 자동 설치를 하지 않고 사용자가 확인 후 누르게 했습니다. GitHub 계정 2단계 인증을 켜 두세요.
+- v1.0.0에는 이 기능이 없으므로 v1.0.0 사용자는 한 번만 수동으로 받아 덮어써야 합니다.
+
 ## 6. 함정 (실제로 겪은 것)
 
 | 문제 | 원인 / 해결 |
@@ -152,12 +173,17 @@ powershell -NoProfile -File .\MiniIpManager.ps1 -Port 8799 -NoElevate -NoBrowser
 - 친구용 다운로드: 릴리스 첨부파일 `Mini-IP-Manager.zip`
   고정 링크 `https://github.com/hunykang/mini-ip-manager/releases/latest/download/Mini-IP-Manager.zip`
 - zip 안 구조: `Mini IP Manager/` 폴더 아래 `MiniIpManager.ps1, index.html, README.md, MAINTENANCE.md, 설치.cmd, install.ps1` (**config.json 없음**)
-- 새 버전 내기:
+- 새 버전 내기 (순서 중요):
+  1. `MiniIpManager.ps1`의 `$AppVersion`을 올림 (예: `1.2.0`)
+  2. 커밋하고 `git push`
+  3. zip을 만들고 같은 번호로 릴리스. 자산 이름은 반드시 `Mini-IP-Manager.zip` (앱이 이 이름으로 찾음)
 
 ```
-git archive --format=zip --prefix="Mini IP Manager/" -o Mini-IP-Manager.zip HEAD
-gh release create v1.x.y Mini-IP-Manager.zip --title "v1.x.y" --notes "변경 내용"
+git archive --format=zip --prefix="Mini IP Manager/" -o Mini-IP-Manager.zip HEAD MiniIpManager.ps1 index.html README.md MAINTENANCE.md 설치.cmd install.ps1
+gh release create v1.2.0 Mini-IP-Manager.zip --title "Mini IP Manager v1.2.0" --notes "변경 내용 (앱의 '무엇이 바뀌었는지 보기' 링크로 열림)"
 ```
+
+  릴리스가 올라가면 사용자 앱에 "새 버전이 있습니다"가 뜹니다. `$AppVersion`과 태그가 다르면 계속 새 버전으로 보이거나 아예 안 보이니 주의.
 
 `.gitattributes`가 `.cmd`/`.ps1`을 CRLF로 내보내므로 `git archive`로 만든 zip을 그대로 쓰면 됩니다.
 
@@ -166,4 +192,5 @@ gh release create v1.x.y Mini-IP-Manager.zip --title "v1.x.y" --notes "변경 �
 - `config.json`, 로그, 실제 사내 IP를 저장소나 zip에 넣지 않기 (공개 저장소)
 - SSID 감지·자동 전환 등 사용자가 뺀 기능을 다시 넣지 않기
 - `-ExecutionPolicy Bypass`, `irm | iex` 같은 우회 실행 방식을 쓰지 않기
+- 화면을 GitHub Pages 등 외부에서 띄우거나, 업데이트를 사용자 확인 없이 자동 설치하지 않기 (사용자가 보안상 거부함)
 - 화면을 다시 복잡하게 만들지 않기
